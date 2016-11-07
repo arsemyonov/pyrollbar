@@ -1364,8 +1364,6 @@ class BlockingAdapter(BaseAdapter):
         headers = self.get_headers()
         url = self.get_url(payload, path)
 
-        print url
-
         resp = transport.post(url,
                               data=payload.pop('body'),
                               headers=headers,
@@ -1662,8 +1660,6 @@ def scope(*args, **kwargs):
         return notifier.scope(*args, **kwargs)
 
     configure(*args, **kwargs)
-
-    return notifier
 
 
 def report_message(*args, **kwargs):

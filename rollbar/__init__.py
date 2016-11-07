@@ -1300,3 +1300,371 @@ def _wsgi_extract_user_ip(environ):
     if real_ip:
         return real_ip
     return environ['REMOTE_ADDR']
+
+
+import abc
+
+
+class AbstractAdapter(six.with_metaclass(abc.ABCMeta)):
+
+    @abc.abstractmethod
+    def notify(self, payload):
+        pass
+
+    @abc.abstractmethod
+    def post(self, path, payload):
+        pass
+
+    @abc.abstractmethod
+    def get_headers(self):
+        pass
+
+    @abc.abstractmethod
+    def get_url(self, server):
+        pass
+
+
+class BaseAdapter(AbstractAdapter):
+
+    def __init__(self, settings):
+        self.settings = settings
+        self.access_token = settings['access_token']
+
+    def notify(self, payload):
+        try:
+            self.post('item/', payload)
+        except Exception as e:
+            log.exception('Exception while posting item %r', e)
+
+    def get_headers(self):
+        return {
+            'Content-Type': 'application/json',
+            'X-Rollbar-Access-Token': self.access_token
+        }
+
+    def get_url(self, payload, path):
+        server = payload.pop('server')
+        endpoint = 'https://{host}{root}'.format(host=server['host'],
+                                                  root=server['root'])
+        return urljoin(endpoint, path)
+
+
+class AgentAdapter(BaseAdapter):
+    def __init__(self, *args, **kwargs):
+        super(AgentAdapter, self).__init__(*args, **kwargs)
+
+        self.agent_log = _create_agent_log()
+
+    def notify(self, payload):
+        self.agent_log.error(payload)
+
+
+class BlockingAdapter(BaseAdapter):
+    def post(self, path, payload):
+        headers = self.get_headers()
+        url = self.get_url(payload, path)
+
+        print url
+
+        resp = transport.post(url,
+                              data=payload.pop('body'),
+                              headers=headers,
+                              timeout=self.settings.get('timeout', DEFAULT_TIMEOUT),
+                              verify=self.settings.get('verify_https', True))
+
+        return _parse_response(path, self.access_token, payload, resp)
+
+
+class AppEngineAdapter(BaseAdapter):
+    def post(self, path, payload):
+        headers = self.get_headers()
+        url = self.get_url(payload, path)
+
+        resp = AppEngineFetch(url,
+                              method="POST",
+                              payload=payload.pop('body'),
+                              headers=headers,
+                              allow_truncated=False,
+                              deadline=self.settings.get('timeout', DEFAULT_TIMEOUT),
+                              validate_certificate=self.settings.get('verify_https', True))
+
+        return _parse_response(path, self.access_token, payload, resp)
+
+
+class TwistedAdapter(BaseAdapter):
+    def get_headers(self):
+        return {
+            'Content-Type': ['application/json'],
+            'X-Rollbar-Access-Token': [self.access_token]
+        }
+
+    def post(self, path, payload):
+        def post_data_cb(data, resp):
+            resp._content = data
+            _parse_response(path, self.access_token, payload, resp)
+
+        def post_cb(resp):
+            r = requests.Response()
+            r.status_code = resp.code
+            r.headers.update(resp.headers.getAllRawHeaders())
+            return treq.content(resp).addCallback(post_data_cb, r)
+
+        headers = self.get_headers()
+        url = self.get_url(payload, path)
+
+        d = treq.post(url, payload.pop('body'), headers=headers,
+                      timeout=self.settings.get('timeout', DEFAULT_TIMEOUT))
+        d.addCallback(post_cb)
+
+
+class Notifier(object):
+    default_settings = {
+        'access_token': None,
+        'enabled': True,
+        'environment': 'production',
+        'exception_level_filters': [],
+        'root': None,  # root path to your code
+        'branch': None,  # git branch name
+        'code_version': None,
+        'handler': 'thread',  # 'blocking', 'thread', 'agent', 'tornado', 'gae' or 'twisted'
+        'endpoint': DEFAULT_ENDPOINT,
+        'timeout': DEFAULT_TIMEOUT,
+        'agent.log_file': 'log.rollbar',
+        'scrub_fields': [
+            'pw',
+            'passwd',
+            'password',
+            'secret',
+            'confirm_password',
+            'confirmPassword',
+            'password_confirmation',
+            'passwordConfirmation',
+            'access_token',
+            'accessToken',
+            'auth',
+            'authentication',
+        ],
+        'url_fields': ['url', 'link', 'href'],
+        'notifier': {
+            'name': 'pyrollbar',
+            'version': VERSION
+        },
+        'allow_logging_basic_config': True,  # set to False to avoid a call to logging.basicConfig()
+        'locals': {
+            'enabled': True,
+            'safe_repr': True,
+            'scrub_varargs': True,
+            'sizes': DEFAULT_LOCALS_SIZES,
+            'whitelisted_types': []
+        },
+        'verify_https': True
+    }
+
+    payload = {
+        'server': {
+            'host': 'api.rollbar.com',
+            'root': '/api/1/'
+        }
+    }
+
+    base_data_hook = None
+
+    def __init__(self, access_token, environment, **kwargs):
+        self.settings = dict_merge(self.default_settings, {})
+
+        self.settings['access_token'] = access_token
+        self.settings['environment'] = environment
+
+        self.settings = dict_merge(self.settings, kwargs)
+
+        adapter_class = kwargs.pop('adapter', BlockingAdapter)
+        self.adapter = adapter_class(self.settings)
+
+        # TODO(art): fix the following, side-effect-ish
+        if self.settings.get('allow_logging_basic_config'):
+             logging.basicConfig()
+
+        # We will perform these transforms in order:
+        # 1. Serialize the payload to be all python built-in objects
+        # 2. Scrub the payloads based on the key suffixes in SETTINGS['scrub_fields']
+        # 3. Scrub URLs in the payload for keys that end with 'url'
+        # 4. Optional - If local variable gathering is enabled, transform the
+        #       trace frame values using the ShortReprTransform.
+
+        serialize_transform = SerializableTransform(safe_repr=self.settings['locals']['safe_repr'],
+                                                     whitelist_types=self.settings['locals']['whitelisted_types'])
+        transforms = [
+            ScrubRedactTransform(),
+            serialize_transform,
+            ScrubTransform(suffixes=[(field,) for field in self.settings['scrub_fields']],
+                           redact_char='*'),
+            ScrubUrlTransform(suffixes=[(field,) for field in self.settings['url_fields']],
+                              params_to_scrub=self.settings['scrub_fields'])
+        ]
+
+        # A list of key prefixes to apply our shortener transform to
+        shortener_keys = [
+            ('body', 'request', 'POST'),
+            ('body', 'request', 'json'),
+        ]
+
+        if self.settings['locals']['enabled']:
+            shortener_keys.append(('body', 'trace', 'frames', '*', 'code'))
+            shortener_keys.append(('body', 'trace', 'frames', '*', 'args', '*'))
+            shortener_keys.append(('body', 'trace', 'frames', '*', 'kwargs', '*'))
+            shortener_keys.append(('body', 'trace', 'frames', '*', 'locals', '*'))
+
+        shortener = ShortenerTransform(safe_repr=self.settings['locals']['safe_repr'],
+                                       keys=shortener_keys,
+                                       **self.settings['locals']['sizes'])
+
+        transforms.append(shortener)
+
+        self.transforms = transforms
+
+    def scope(self, *args, **kwargs):
+        return self.__class__(*args, **kwargs)
+
+    @property
+    def access_token(self):
+        return self.settings.get('access_token')
+
+    @property
+    def configured(self):
+        if not self.settings.get('enabled'):
+            return False
+
+        if not self.access_token:
+            return False
+
+        return True
+
+    def report_message(self, message, level='error', request=None, extra_data=None, payload_data=None):
+        """
+        Reports an arbitrary string message to Rollbar.
+
+        message: the string body of the message
+        level: level to report at. One of: 'critical', 'error', 'warning', 'info', 'debug'
+        request: the request object for the context of the message
+        extra_data: dictionary of params to include with the message. 'body' is reserved.
+        payload_data: param names to pass in the 'data' level of the payload; overrides defaults.
+        """
+
+        try:
+            return self._report_message(message, level, request, extra_data, payload_data)
+        except Exception as e:
+            log.exception("Exception while reporting message to Rollbar. %r", e)
+
+    def transform(self, obj, key=None):
+        for transform in self.transforms:
+            obj = transforms.transform(obj, transform, key=key)
+
+        return obj
+
+    def build_payload(self, data):
+        """
+        Returns the full payload as a string.
+        """
+
+        for k, v in iteritems(data):
+            data[k] = self.transform(v, key=(k, ))
+
+        payload = {
+            'access_token': self.access_token,
+            'data': data
+        }
+
+        return json.dumps(payload)
+
+    def send_payload(self, payload):
+        """
+        Sends a payload object, (the result of calling _build_payload()).
+        Uses the configured handler from SETTINGS['handler']
+
+        Available handlers:
+        - 'blocking': calls _send_payload() (which makes an HTTP request) immediately, blocks on it
+        - 'thread': starts a single-use thread that will call _send_payload(). returns immediately.
+        - 'agent': writes to a log file to be processed by rollbar-agent
+        - 'tornado': calls _send_payload_tornado() (which makes an async HTTP request using tornado's AsyncHTTPClient)
+        - 'gae': calls _send_payload_appengine() (which makes a blocking call to Google App Engine)
+        - 'twisted': calls _send_payload_twisted() (which makes an async HTTP reqeust using Twisted and Treq)
+        """
+
+        payload = dict_merge(self.payload, { 'body': payload })
+        self.adapter.notify(payload)
+
+    def _build_base_data(self, request, level='error'):
+        data = {
+            'timestamp': int(time.time()),
+            'environment': self.settings['environment'],
+            'level': level,
+            'language': 'python %s' % '.'.join(str(x) for x in sys.version_info[:3]),
+            'notifier': self.settings['notifier'],
+            'uuid': text(uuid.uuid4()),
+        }
+
+        if self.settings.get('code_version'):
+            data['code_version'] = self.settings['code_version']
+
+        if self.base_data_hook:
+            self.base_data_hook(request, data)
+
+        return data
+
+    def _report_message(self, message, level, request, extra_data, payload_data):
+        """
+        Called by report_message() wrapper
+        """
+        if not self.configured:
+            return
+
+        data = self._build_base_data(request, level=level)
+
+        # message
+        data['body'] = {
+            'message': {
+                'body': message
+            }
+        }
+
+        if extra_data:
+            extra_data = extra_data
+            data['body']['message'].update(extra_data)
+
+        _add_request_data(data, request)
+        _add_person_data(data, request)
+
+        data['server'] = _build_server_data()
+
+        if payload_data:
+            data = dict_merge(data, payload_data)
+
+        payload = self.build_payload(data)
+
+        self.send_payload(payload)
+
+        return data['uuid']
+
+
+notifier = None
+payload = None
+
+
+def configure(*args, **kwargs):
+    global notifier, payload
+
+    notifier = Notifier(*args, **kwargs)
+    payload = notifier.payload
+
+
+def scope(*args, **kwargs):
+    if notifier is not None:
+        return notifier.scope(*args, **kwargs)
+
+    configure(*args, **kwargs)
+
+    return notifier
+
+
+def report_message(*args, **kwargs):
+    return notifier.report_message(*args, **kwargs)

@@ -1342,11 +1342,8 @@ class BaseAdapter(AbstractAdapter):
             'X-Rollbar-Access-Token': self.access_token
         }
 
-    def get_url(self, payload, path):
-        server = payload.pop('server')
-        endpoint = 'https://{host}{root}'.format(host=server['host'],
-                                                  root=server['root'])
-        return urljoin(endpoint, path)
+    def get_url(self, path):
+        return urljoin(self.settings['endpoint'], path)
 
 
 class AgentAdapter(BaseAdapter):
@@ -1362,10 +1359,10 @@ class AgentAdapter(BaseAdapter):
 class BlockingAdapter(BaseAdapter):
     def post(self, path, payload):
         headers = self.get_headers()
-        url = self.get_url(payload, path)
+        url = self.get_url(path)
 
         resp = transport.post(url,
-                              data=payload.pop('body'),
+                              data=payload,
                               headers=headers,
                               timeout=self.settings.get('timeout', DEFAULT_TIMEOUT),
                               verify=self.settings.get('verify_https', True))
@@ -1376,11 +1373,11 @@ class BlockingAdapter(BaseAdapter):
 class AppEngineAdapter(BaseAdapter):
     def post(self, path, payload):
         headers = self.get_headers()
-        url = self.get_url(payload, path)
+        url = self.get_url(path)
 
         resp = AppEngineFetch(url,
                               method="POST",
-                              payload=payload.pop('body'),
+                              payload=payload,
                               headers=headers,
                               allow_truncated=False,
                               deadline=self.settings.get('timeout', DEFAULT_TIMEOUT),
@@ -1408,9 +1405,9 @@ class TwistedAdapter(BaseAdapter):
             return treq.content(resp).addCallback(post_data_cb, r)
 
         headers = self.get_headers()
-        url = self.get_url(payload, path)
+        url = self.get_url(path)
 
-        d = treq.post(url, payload.pop('body'), headers=headers,
+        d = treq.post(url, payload, headers=headers,
                       timeout=self.settings.get('timeout', DEFAULT_TIMEOUT))
         d.addCallback(post_cb)
 
@@ -1458,12 +1455,7 @@ class Notifier(object):
         'verify_https': True
     }
 
-    payload = {
-        'server': {
-            'host': 'api.rollbar.com',
-            'root': '/api/1/'
-        }
-    }
+    payload = {}
 
     base_data_hook = None
 
@@ -1575,21 +1567,7 @@ class Notifier(object):
         return json.dumps(payload)
 
     def send_payload(self, payload):
-        """
-        Sends a payload object, (the result of calling _build_payload()).
-        Uses the configured handler from SETTINGS['handler']
-
-        Available handlers:
-        - 'blocking': calls _send_payload() (which makes an HTTP request) immediately, blocks on it
-        - 'thread': starts a single-use thread that will call _send_payload(). returns immediately.
-        - 'agent': writes to a log file to be processed by rollbar-agent
-        - 'tornado': calls _send_payload_tornado() (which makes an async HTTP request using tornado's AsyncHTTPClient)
-        - 'gae': calls _send_payload_appengine() (which makes a blocking call to Google App Engine)
-        - 'twisted': calls _send_payload_twisted() (which makes an async HTTP reqeust using Twisted and Treq)
-        """
-
-        payload = dict_merge(self.payload, { 'body': payload })
-        self.adapter.notify(payload)
+        self.adapter.notify(dict_merge(self.payload, payload))
 
     def _build_base_data(self, request, level='error'):
         data = {
@@ -1661,7 +1639,7 @@ def scope(*args, **kwargs):
 
     configure(*args, **kwargs)
 
-    return scope(*args, **kwargs)
+    return notifier
 
 
 def report_message(*args, **kwargs):

@@ -50,7 +50,7 @@ The prototype is living in `redesign` branch.
 # TODO
 
 Make adapters that implements the following spec:
-  - get_request_data
+  - get_request_data (Common, Django, DRF, Flask, etc)
   - get_person_data
   - post
   — etc

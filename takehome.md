@@ -63,3 +63,27 @@ Make a root notifier instance using the following spec:
 Move all vendor-related imports into `pyrollbar.contrib`.
 
 As a good addition, condider `sys.excepthook`.
+
+# Usage
+
+```python
+import rollbar
+
+rollbar.configure('<access_token>', 'dev')
+rollbar.report_message('root')
+
+child = rollbar.scope('<access_token>', 'mailer')
+child.report_message('child')
+
+child.payload['extra'] = { 'key': 'value' }
+child.report_message('child with extra')
+
+another_child = child.scope('<access_token>', 'transactional_mailer')
+another_child.report_message('transactional mailer message')
+
+rollbar.configure('<access_token', 'dev', adapter=TwistedAdapter)
+rollbar.report_message('twisted message')
+
+rollbar.configure('<access_token', 'dev', adapter=AgentAdapter)
+rollbar.report_message('agent message')
+```

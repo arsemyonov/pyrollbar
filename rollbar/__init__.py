@@ -1661,6 +1661,8 @@ def scope(*args, **kwargs):
 
     configure(*args, **kwargs)
 
+    return scope(*args, **kwargs)
+
 
 def report_message(*args, **kwargs):
     return notifier.report_message(*args, **kwargs)

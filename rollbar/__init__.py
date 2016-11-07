@@ -1513,7 +1513,7 @@ class Notifier(object):
         self.transforms = transforms
 
     def scope(self, *args, **kwargs):
-        return self.__class__(*args, **kwargs)
+        return self.__class__(adapter=self.adapter.__class__, *args, **kargs)
 
     @property
     def access_token(self):
@@ -1567,7 +1567,7 @@ class Notifier(object):
         return json.dumps(payload)
 
     def send_payload(self, payload):
-        self.adapter.notify(dict_merge(self.payload, payload))
+        self.adapter.notify(payload)
 
     def _build_base_data(self, request, level='error'):
         data = {
@@ -1615,7 +1615,7 @@ class Notifier(object):
         if payload_data:
             data = dict_merge(data, payload_data)
 
-        payload = self.build_payload(data)
+        payload = self.build_payload(dict_merge(self.payload, data))
 
         self.send_payload(payload)
 
@@ -1632,14 +1632,14 @@ def configure(*args, **kwargs):
     notifier = Notifier(*args, **kwargs)
     payload = notifier.payload
 
+    return notifier
+
 
 def scope(*args, **kwargs):
     if notifier is not None:
         return notifier.scope(*args, **kwargs)
 
-    configure(*args, **kwargs)
-
-    return notifier
+    return configure(*args, **kwargs)
 
 
 def report_message(*args, **kwargs):

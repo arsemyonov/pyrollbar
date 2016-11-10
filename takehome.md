@@ -38,6 +38,8 @@ Additional notes:
 
 1. Use tox to test over all python versions.
 2. Generate api docs.
+3. Use pytest + mock.
+4. Use six.
 
 **Pros**
 

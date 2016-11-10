@@ -1633,6 +1633,10 @@ def configure(*args, **kwargs):
     return notifier
 
 
+class ConfigurationError(Exception):
+    pass
+
+
 def scope(*args, **kwargs):
     if notifier is None:
         raise ConfigurationError('You must configure root notifier first')

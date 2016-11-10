@@ -49,7 +49,7 @@ The prototype is living in `redesign` branch.
 
 # TODO
 
-Make adapters that implements the following spec:
+Make adapters that implement the following spec:
   - get_request_data (Common, Django, DRF, Flask, etc)
   - get_person_data
   - post
@@ -60,7 +60,7 @@ Make a root notifier instance using the following spec:
   - report_exception
   - scope
 
-Move all vendor-related imports into `pyrollbar.contrib`.
+Move all vendor related imports/discovery into `pyrollbar.contrib`.
 
 As a good addition, condider `sys.excepthook`.
 

@@ -78,12 +78,16 @@ child.report_message('child')
 child.payload['extra'] = { 'key': 'value' }
 child.report_message('child with extra')
 
-another_child = child.scope('<access_token>', 'transactional_mailer')
-another_child.report_message('transactional mailer message')
-
 rollbar.configure('<access_token', 'dev', adapter=TwistedAdapter)
 rollbar.report_message('twisted message')
 
 rollbar.configure('<access_token', 'dev', adapter=AgentAdapter)
 rollbar.report_message('agent message')
+
+child = rollbar.scope('<access_token>', 'environment')
+child.adapter  # => <default adapter>
+
+
+custom_adapter_child = rollbar.scope('<access_token>', 'environment', adapter=CustomAdapterImpl)
+custom_adapter_child.adapter  # => <CustomAdapterImpl>
 ```

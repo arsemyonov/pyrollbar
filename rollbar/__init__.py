@@ -1512,9 +1512,6 @@ class Notifier(object):
 
         self.transforms = transforms
 
-    def scope(self, *args, **kwargs):
-        return self.__class__(adapter=self.adapter.__class__, *args, **kargs)
-
     @property
     def access_token(self):
         return self.settings.get('access_token')
@@ -1627,6 +1624,7 @@ payload = None
 
 
 def configure(*args, **kwargs):
+    # TODO(art): Too bad. Use werkzeug.LocalProxy or something like that instead.
     global notifier, payload
 
     notifier = Notifier(*args, **kwargs)
@@ -1636,10 +1634,12 @@ def configure(*args, **kwargs):
 
 
 def scope(*args, **kwargs):
-    if notifier is not None:
-        return notifier.scope(*args, **kwargs)
+    if notifier is None:
+        raise ConfigurationError('You must configure root notifier first')
 
-    return configure(*args, **kwargs)
+    kwargs.setdefault('adapter', notifier.adapter.__class__)
+
+    return Notifier(*args, **kargs)
 
 
 def report_message(*args, **kwargs):

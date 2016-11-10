@@ -34,6 +34,11 @@ Implement Notifier object that:
 4. Could be extended by custom adapter implementation + DI/IoC.
 5. Will not affect to global variables.
 
+Additional notes:
+
+1. Use tox to test over all python versions.
+2. Generate api docs.
+
 **Pros**
 
 1. Easy to test. Mock, not patch.
